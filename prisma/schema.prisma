@@ -1,0 +1,511 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                     String                  @id @default(cuid())
+  phone                  String                  @unique
+  name                   String?
+  email                  String?
+  passwordHash           String? // optional password login (fallback when SMS is slow)
+  role                   String                  @default("CUSTOMER") // CUSTOMER | ADMIN
+  points                 Int                     @default(0)
+  // saved address (prefills checkout)
+  province               String?
+  city                   String?
+  address                String?
+  unit                   String?
+  postalCode             String?
+  createdAt              DateTime                @default(now())
+  orders                 Order[]
+  coupons                Coupon[]
+  snappPayChangeRequests SnappPayChangeRequest[]
+}
+
+model Otp {
+  id        String   @id @default(cuid())
+  phone     String
+  code      String
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  attempts  Int      @default(0) // wrong guesses; the code dies after MAX_ATTEMPTS
+  createdAt DateTime @default(now())
+
+  @@index([phone])
+}
+
+/// Two levels deep: a parent groups leaves, products always hang off a leaf.
+/// A parent's shop page lists everything under its children.
+model Category {
+  id        String     @id @default(cuid())
+  slug      String     @unique
+  nameFa    String
+  nameEn    String     @default("")
+  image     String?
+  sort      Int        @default(0)
+  active    Boolean    @default(true)
+  parentId  String?
+  parent    Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children  Category[] @relation("CategoryTree")
+  products  Product[]
+  campaigns Campaign[]
+
+  @@index([parentId])
+}
+
+model Product {
+  id            String         @id @default(cuid())
+  slug          String         @unique
+  nameFa        String
+  nameEn        String         @default("")
+  description   String         @default("")
+  descriptionEn String         @default("")
+  price         Int // Toman
+  salePrice     Int? // Toman, optional per-product discount price
+  image         String // main photo, path under /public
+  stock         Int            @default(20)
+  featured      Boolean        @default(false)
+  active        Boolean        @default(true)
+  categoryId    String
+  category      Category       @relation(fields: [categoryId], references: [id])
+  createdAt     DateTime       @default(now())
+  orderItems    OrderItem[]
+  gallery       ProductImage[]
+  campaigns     Campaign[]
+  sizes         ProductSize[]
+  homeSlots     HomeFeature[]
+  colors        ProductColor[]
+  /// The «رنگ‌بندی» switch on the product form. Colours can be defined and kept
+  /// while the switch is off, which is how a colourway is retired for a season
+  /// without losing its price.
+  colorsEnabled Boolean        @default(false)
+
+  @@index([categoryId])
+  @@index([active])
+}
+
+/// One buyable size of a product, with its own price and its own stock.
+///
+/// `Product.price` / `salePrice` / `stock` stay as the fallback for products
+/// that have no sizes at all, and `Product.stock` is kept as the sum of its
+/// size rows so the dashboard's low-stock list keeps working either way.
+model ProductSize {
+  id         String  @id @default(cuid())
+  productId  String
+  product    Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  label      String // "S" | "فری‌سایز" | "سایز سفارشی"
+  rangeLabel String  @default("") // shown next to the label: "۳۸–۴۰"، "۹۰×۱۷۰ سانتی‌متر"
+  /// STANDARD = an ordinary size · FREE = فری‌سایز · CUSTOM = سایز سفارشی,
+  /// which is quoted by hand and is NOT purchasable online.
+  kind       String  @default("STANDARD")
+  /// What this size ADDS to `Product.price` - the single number the shop types.
+  /// 0 means "same as the base price", which is what almost every size is, and
+  /// it may be negative for a size that costs less.
+  priceDelta Int     @default(0)
+  /// Derived: always `Product.price + priceDelta`, rewritten by
+  /// `syncVariantPrices()` whenever either side moves. Kept only so the column
+  /// never contradicts the app - pricing reads the base and the delta.
+  price      Int // Toman
+  salePrice  Int?
+  stock      Int     @default(0)
+  lengthCm   Int? // garment length - the estimator uses it for the hem sentence
+  fitFrom    Int? // Iranian clothing size numbers this size fits, e.g. 38..40
+  fitTo      Int?
+  heightFrom Int? // kids sizes are matched by the child's height instead
+  heightTo   Int?
+  sort       Int     @default(0)
+  active     Boolean @default(true)
+
+  @@index([productId])
+}
+
+/// The global size presets («جدول سایزها»), editable at /admin/sizes.
+/// Both the size guide page and the estimator read their tables from here, and
+/// the product form fills its size rows from one of these in a click.
+model SizeChart {
+  id        String         @id @default(cuid())
+  key       String         @unique // wearable | kids | towel | mat | accessory | hat
+  nameFa    String
+  intro     String         @default("") // one line under the table heading
+  col2Label String         @default("") // header of the 2nd column, "" = hidden
+  col3Label String         @default("")
+  sort      Int            @default(0)
+  active    Boolean        @default(true)
+  rows      SizeChartRow[]
+}
+
+model SizeChartRow {
+  id         String    @id @default(cuid())
+  chartId    String
+  chart      SizeChart @relation(fields: [chartId], references: [id], onDelete: Cascade)
+  label      String
+  rangeLabel String    @default("") // 2nd column: "۳۸–۴۰" / "۴ تا ۶" / "۴۵×۷۰ سانتی‌متر"
+  extraLabel String    @default("") // 3rd column: "۸۹–۹۶" / "۱۰۴–۱۲۰"
+  kind       String    @default("STANDARD")
+  fitFrom    Int?
+  fitTo      Int?
+  heightFrom Int?
+  heightTo   Int?
+  lengthCm   Int?
+  sort       Int       @default(0)
+  active     Boolean   @default(true)
+
+  @@index([chartId])
+}
+
+/// A hand-picked product in one of the three homepage slots, editable at
+/// /admin/homepage. The section titles themselves live in Setting.
+model HomeFeature {
+  id        String  @id @default(cuid())
+  slot      String // SHOWCASE | POPULAR | SPECIAL
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sort      Int     @default(0)
+
+  @@unique([slot, productId])
+  @@index([slot])
+}
+
+/// One page view. Raw rows are kept for 90 days and then rolled into
+/// VisitWeek; both are pruned on write so the database stays small.
+model PageView {
+  id        String   @id @default(cuid())
+  path      String
+  day       String // YYYY-MM-DD, Tehran
+  weekKey   String // the Tehran date of that week's شنبه
+  visitorId String
+  createdAt DateTime @default(now())
+
+  @@index([weekKey])
+  @@index([day])
+  @@index([path])
+}
+
+/// Rolled-up totals for weeks whose raw rows have been pruned.
+model VisitWeek {
+  weekKey  String @id
+  visitors Int    @default(0)
+  views    Int    @default(0)
+}
+
+/// Extra photos for a product's gallery (the main one stays on Product.image).
+model ProductImage {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  url       String
+  sort      Int     @default(0)
+}
+
+/// Homepage/marketing banners, editable from the admin panel.
+model Banner {
+  id        String    @id @default(cuid())
+  title     String
+  subtitle  String?
+  badge     String? // e.g. "٪۲۰ تخفیف"
+  image     String
+  link      String?
+  slot      String    @default("STRIP") // HERO | STRIP | GRID
+  sort      Int       @default(0)
+  active    Boolean   @default(true)
+  startsAt  DateTime?
+  endsAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+/// A discount campaign: whole site, one category, or a single product.
+/// The storefront always applies whichever price is lowest for the buyer.
+model Campaign {
+  id         String    @id @default(cuid())
+  title      String
+  percent    Int // 1..90
+  scope      String    @default("SITE") // SITE | CATEGORY | PRODUCT
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id])
+  productId  String?
+  product    Product?  @relation(fields: [productId], references: [id])
+  active     Boolean   @default(true)
+  startsAt   DateTime?
+  endsAt     DateTime?
+  createdAt  DateTime  @default(now())
+}
+
+/// Simple key/value store for site-wide content (phone, address, shipping, texts).
+model Setting {
+  key   String @id
+  value String
+}
+
+/// Members-club tiers, editable from the admin panel. Perks are stored as a
+/// newline-separated list. The functional numbers (welcome points, points per
+/// 100k) live in Setting so nothing here affects how points are calculated.
+model ClubTier {
+  id        String @id @default(cuid())
+  key       String @unique
+  nameFa    String
+  emoji     String @default("🐚")
+  minPoints Int    @default(0)
+  perks     String @default("") // one perk per line
+  sort      Int    @default(0)
+}
+
+model Order {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+  status String @default("AWAITING_PAYMENT") // AWAITING_PAYMENT | AWAITING_SNAPPPAY | AWAITING_TRANSFER | PAID | DISPATCHING | SHIPPED | DELIVERED | CANCELLED
+
+  /// GATEWAY = درگاه سپ. SNAPPPAY = خرید چهار قسطه اسنپ‌پی: no gateway, the shop
+  /// confirms by hand after the buyer completes registration with SnappPay.
+  paymentMethod      String    @default("GATEWAY") // GATEWAY | SNAPPPAY
+  /// When the shop confirmed the SnappPay registration. The instalment schedule
+  /// shown to the buyer counts from this moment, so it must not be back-filled.
+  snapppayApprovedAt DateTime?
+
+  goodsTotal   Int @default(0) // Toman, before discount and shipping
+  discount     Int @default(0) // Toman taken off by a coupon
+  shippingCost Int @default(0) // Toman
+  total        Int // Toman, what the buyer actually pays
+
+  firstName  String  @default("")
+  lastName   String  @default("")
+  fullName   String
+  company    String?
+  province   String  @default("")
+  city       String
+  address    String
+  unit       String?
+  postalCode String?
+  phone      String
+  email      String?
+  note       String?
+
+  shippingMethodId String?
+  shippingMethod   ShippingMethod? @relation(fields: [shippingMethodId], references: [id])
+  shippingName     String?
+  trackingCode     String?
+
+  couponId   String?
+  coupon     Coupon? @relation(fields: [couponId], references: [id])
+  couponCode String?
+
+  stockApplied  Boolean @default(false) // inventory decremented once, on payment
+  pointsAwarded Boolean @default(false) // club points granted once, on payment
+
+  createdAt              DateTime                @default(now())
+  items                  OrderItem[]
+  payments               Payment[]
+  snappPayChangeRequests SnappPayChangeRequest[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+/// A customer's request to reduce or cancel a settled SnappPay purchase.
+/// Nothing in this row moves money: an admin must review it and use the
+/// existing confirmed Update/Cancel flow. `pendingKey` is the order id while a
+/// request is open, so two browser tabs cannot create competing requests.
+model SnappPayChangeRequest {
+  id             String    @id @default(cuid())
+  orderId        String
+  order          Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind           String // UPDATE | CANCEL
+  status         String    @default("PENDING") // PENDING | COMPLETED | REJECTED | WITHDRAWN
+  requestedItems String    @default("[]") // JSON: [{ id, qty }]
+  summary        String?
+  resolution     String?
+  pendingKey     String?   @unique
+  createdAt      DateTime  @default(now())
+  reviewedAt     DateTime?
+  reviewedById   String?
+  reviewedByName String?
+
+  @@index([orderId, status])
+  @@index([userId, createdAt])
+}
+
+/// Delivery options shown at checkout, managed from the admin panel.
+model ShippingMethod {
+  id            String  @id @default(cuid())
+  nameFa        String
+  description   String?
+  cost          Int     @default(0) // Toman
+  freeFrom      Int     @default(0) // free above this goods subtotal; 0 = never
+  estimatedDays String?
+  active        Boolean @default(true)
+  sort          Int     @default(0)
+  orders        Order[]
+}
+
+/// Discount codes. A code with `userId` set is personal to that customer.
+model Coupon {
+  id                String    @id @default(cuid())
+  code              String    @unique // stored uppercase
+  type              String    @default("PERCENT") // PERCENT | FIXED
+  value             Int // percent (1..90) or a fixed Toman amount
+  minSubtotal       Int       @default(0)
+  freeShipping      Boolean   @default(false)
+  /// Whether the code may be combined with an instalment method (اسنپ‌پی /
+  /// دیجی‌پی). Defaults to true so every code that already exists keeps behaving
+  /// exactly as it did; the shop opts a code OUT per code.
+  allowInstallments Boolean   @default(true)
+  maxUses           Int? // total redemptions allowed; null = unlimited
+  usedCount         Int       @default(0)
+  perUserLimit      Int       @default(1)
+  userId            String? // personal code when set
+  user              User?     @relation(fields: [userId], references: [id])
+  active            Boolean   @default(true)
+  startsAt          DateTime?
+  endsAt            DateTime?
+  createdAt         DateTime  @default(now())
+  orders            Order[]
+}
+
+/// One row per attempt at paying an order through an online gateway - 
+/// SEP (سپ / پرداخت الکترونیک سامان)، دیجی‌پی or اسنپ‌پی.
+model Payment {
+  id         String             @id @default(cuid())
+  orderId    String
+  order      Order              @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  /// SEP | DIGIPAY | SNAPPPAY - which gateway this attempt went to, so the
+  /// callback verifies it against the right one.
+  provider   String             @default("SEP")
+  /// ResNum sent to SEP - unique per attempt so a retry never collides.
+  /// دیجی‌پی receives it as providerId and اسنپ‌پی as transactionId; in every
+  /// case it is the only handle the callback gets for finding the attempt.
+  resNum     String             @unique
+  /// The receipt the gateway hands back - RefNum («رسید دیجیتالی») for SEP,
+  /// trackingCode for دیجی‌پی, transactionId for اسنپ‌پی. Unique = our
+  /// double-spend guard, which the SEP docs make the merchant's
+  /// responsibility, not the bank's; دیجی‌پی and اسنپ‌پی sign nothing at all,
+  /// so it matters even more there.
+  refNum     String?            @unique
+  /// اسنپ‌پی's paymentToken, which every one of its follow-up calls needs
+  /// (verify/settle/revert) - without it a withdrawal cannot be finished OR
+  /// undone. دیجی‌پی stores its ticket here.
+  token      String?
+  amountRial Int
+  /// VERIFYING is the اسنپ‌پی callback's claim: its doc requires that verify be
+  /// called exactly once even when the gateway sends several callbacks, so the
+  /// attempt is moved out of PENDING before anything is called.
+  status     String             @default("PENDING") // PENDING | VERIFYING | PAID | FAILED | CANCELLED | MISMATCH | REVERSED
+  message    String?
+  traceNo    String?
+  rrn        String?
+  maskedPan  String?
+  createdAt  DateTime           @default(now())
+  paidAt     DateTime?
+  /// اسنپ‌پی only: when تسویه succeeded. Verified-but-unsettled is a real state
+  /// - the buyer's credit is already withdrawn and the goods are owed, but the
+  /// shop has not captured the money yet. Null on a PAID اسنپ‌پی row means
+  /// someone has to settle it by hand, which is what tools/snapppaycheck.mjs
+  /// reports on.
+  settledAt  DateTime?
+  /// اسنپ‌پی only: every تغییر سبد / لغو the shop sent after the purchase was
+  /// registered. See PaymentOperation.
+  operations PaymentOperation[]
+
+  /// The admin searches orders by اسنپ‌پی transaction id, which is `resNum`
+  /// (ours) or `refNum` (theirs) - both already unique-indexed. These two cover
+  /// the order page's own joins, which had no index at all.
+  @@index([orderId])
+  @@index([provider, status])
+}
+
+/// One follow-up call the shop made to اسنپ‌پی about a purchase that was already
+/// registered - تغییر سبد (update), لغو (cancel), a late تسویه (settle), or a
+/// برگشت (revert).
+///
+/// اسنپ‌پی signs nothing back and `Payment.message` is overwritten on every
+/// write, so without this row the pm2 log would be the only record of who
+/// refunded what - and these calls are irreversible. The certification review
+/// asks to see them, and a buyer disputing an instalment a month later is the
+/// real reason to keep them.
+model PaymentOperation {
+  id         String   @id @default(cuid())
+  paymentId  String
+  payment    Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  /// UPDATE | CANCEL | SETTLE | REVERT - which اسنپ‌پی endpoint was called.
+  kind       String
+  /// OK | FAILED
+  status     String   @default("OK")
+  /// اسنپ‌پی's errorCode when it refused, so 1011 «وضعیت تراکنش معتبر نیست»
+  /// is still readable a month later.
+  code       Int?
+  /// Rial the basket was changed to. Null for a cancel, which zeroes it.
+  amountRial Int?
+  /// What was actually done, in Persian, for the admin's own audit column.
+  message    String?
+  /// The admin who pressed the button; null when a tool or a callback did it.
+  /// Deliberately not a relation, like OrderItem's size/colour snapshots - the
+  /// record must survive the account being deleted.
+  userId     String?
+  userName   String?
+  createdAt  DateTime @default(now())
+
+  @@index([paymentId])
+  @@index([createdAt])
+}
+
+model OrderItem {
+  id        String  @id @default(cuid())
+  orderId   String
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  nameFa    String
+  qty       Int
+  unitPrice Int // Toman at purchase time
+  /// Deliberately NOT a relation: the label is stored alongside so an order's
+  /// history still reads correctly after the size row itself is deleted.
+  sizeId    String?
+  sizeLabel String?
+  /// Same deliberate non-relation as `sizeId`: the colour's name is stored
+  /// alongside so an order still reads correctly after the colour row is gone.
+  colorId   String?
+  colorName String?
+}
+
+/// One buyable colour of a product.
+///
+/// Unlike a size, a colour carries no stock of its own - stock stays on the
+/// size rows (or on the product when it has none), so there is exactly one
+/// shelf to decrement and no size×colour matrix to keep straight. A colourway
+/// that has run out is switched off with `active`.
+model ProductColor {
+  id         String  @id @default(cuid())
+  productId  String
+  product    Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  nameFa     String
+  /// Swatch shown on the product page, e.g. "#c9a24b".
+  hex        String  @default("#cccccc")
+  /// Toman added to `Product.price`, exactly like `ProductSize.priceDelta`.
+  priceDelta Int     @default(0)
+  /// Which of the product's photos this colourway is. Picking the colour on
+  /// the product page jumps the gallery to it. A path already in the product's
+  /// own image list - null just means «no photo assigned yet», which is fine.
+  image      String?
+  sort       Int     @default(0)
+  active     Boolean @default(true)
+
+  @@index([productId])
+}
+
+/// The global colour palette («جدول رنگ‌ها»), editable at /admin/colors.
+/// The product form fills its colour rows from these in one click, exactly the
+/// way «الگوی سایزبندی» fills the size rows from SizeChart.
+model ColorPreset {
+  id     String  @id @default(cuid())
+  nameFa String
+  hex    String  @default("#cccccc")
+  sort   Int     @default(0)
+  active Boolean @default(true)
+}

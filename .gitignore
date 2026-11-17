@@ -1,0 +1,23 @@
+node_modules
+.next
+out
+*.tsbuildinfo
+next-env.d.ts
+
+# secrets - never commit any of these
+KEYS/
+.env
+.env.*
+!.env.example
+
+# live data
+prisma/dev.db
+prisma/dev.db-journal
+prisma/dev.db-wal
+prisma/dev.db-shm
+prisma/dev.db.*
+prisma/*.bak
+public/uploads/
+backups/
+
+.DS_Store

@@ -1,0 +1,55 @@
+{
+  "dependencies": {
+    "@fontsource-variable/markazi-text": "^5.3.0",
+    "@fontsource/gulzar": "^5.3.0",
+    "@prisma/client": "^6.19.3",
+    "@tailwindcss/postcss": "^4.3.3",
+    "gsap": "^3.15.0",
+    "next": "^16.2.10",
+    "prisma": "^6.19.3",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "server-only": "^0.0.1",
+    "tailwindcss": "^4.3.3",
+    "vazirmatn": "^33.0.3",
+    "sharp": "0.32.6"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "pdfjs-dist": "^4.10.38",
+    "puppeteer-core": "^25.3.0",
+    "typescript": "^5.9.3"
+  },
+  "name": "moai-gallery",
+  "scripts": {
+    "dev": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/dev-guard.ps1",
+    "build": "next build",
+    "start": "next start",
+    "seed": "node prisma/seed.mjs",
+    "dev:raw": "next dev",
+    "dev:clean": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true})\" && next dev",
+    "test:payment": "node tools/paytest.mjs",
+    "seed:content": "node prisma/seed-content.mjs",
+    "test:shop": "node tools/shoptest.mjs",
+    "backup": "node tools/backup.mjs",
+    "test:coupon": "node tools/coupontest.mjs",
+    "test:snapp": "node tools/snapptest.mjs",
+    "test:card": "node tools/cardtest.mjs",
+    "test:size": "node tools/sizetest.mjs",
+    "upgrade:sizes": "node prisma/upgrade-sizes.mjs",
+    "sizes:regrade": "node prisma/regrade-wearables.mjs",
+    "categories:images": "node prisma/set-category-images.mjs",
+    "test:all": "node tools/paytest.mjs && node tools/coupontest.mjs && node tools/shoptest.mjs && node tools/snapptest.mjs && node tools/cardtest.mjs && node tools/sizetest.mjs && node tools/colortest.mjs && node tools/digipaytest.mjs",
+    "seed:story": "node prisma/seed-story-banners.mjs",
+    "test:color": "node tools/colortest.mjs",
+    "test:digipay": "node tools/digipaytest.mjs",
+    "check:digipay": "node tools/digipaycheck.mjs",
+    "brand": "node tools/brand-assets.mjs"
+  },
+  "private": true,
+  "overrides": {
+    "sharp": "0.32.6"
+  }
+}
